@@ -1,0 +1,16 @@
+{
+    "name": "cloudtak-plugin-3d-models-tools",
+    "private": true,
+    "type": "module",
+    "description": "Offline tools for preparing models. Not part of the CloudTAK build.",
+    "scripts": {
+        "optimize": "node optimize-model.mjs"
+    },
+    "dependencies": {
+        "@gltf-transform/core": "4.5.1",
+        "@gltf-transform/extensions": "4.5.1",
+        "@gltf-transform/functions": "4.5.1",
+        "meshoptimizer": "1.3.0",
+        "sharp": "0.35.5"
+    }
+}
