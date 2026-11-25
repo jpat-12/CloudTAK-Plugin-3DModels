@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Model work files: keep raw downloads out of git; commit only the optimized GLB
+*.raw.glb
+*.optimized.glb
+/models-src/
+
+# Logs / OS / editor
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
