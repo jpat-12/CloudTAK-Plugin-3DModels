@@ -24,6 +24,8 @@ export interface ModelStatus {
         triangles: number;
         /** Bounding-box size in metres at the current scale: east-west, north-south, height. */
         sizeMeters: [number, number, number];
+        /** How far above the model's lowest point the detected ground is, in metres. */
+        groundAboveLowest: number;
         bytes: number;
     } | null;
 }

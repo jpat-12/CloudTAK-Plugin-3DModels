@@ -23,6 +23,8 @@ interface LoadedModel {
     triangles: number;
     /** Bounding-box size in model units, after recentring (x, y-up, z). */
     size: THREE.Vector3;
+    /** Metres (model units) between the model's lowest point and the ground level used. */
+    groundAboveLowest: number;
     bytes: number;
 }
 
@@ -93,6 +95,76 @@ function makeUnlit(root: THREE.Object3D): void {
     });
 }
 
+/**
+ * Find the height of the ground in a photogrammetry scan. Scans include the ground around the
+ * building, and usually stray points or a sunken area below it, so the lowest point is a poor
+ * choice: putting it on the map leaves the real ground floating above the imagery.
+ *
+ * Instead, add up the area of every near-horizontal triangle by its height (0.5 m bins) and
+ * take the height with the most flat area in the lower half of the model, ignoring the lowest
+ * 2% of that area as noise (stray points under the scan). That is the open ground the building stands on.
+ * Area, not vertex count, because decimation leaves flat ground with very few vertices.
+ */
+function detectGroundY(root: THREE.Object3D, box: THREE.Box3): number {
+    const BIN = 0.5;
+    const bins = new Map<number, number>();
+    let total = 0;
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+
+    root.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry) return;
+        const pos = mesh.geometry.getAttribute('position');
+        if (!pos) return;
+        const index = mesh.geometry.getIndex();
+        const count = index ? index.count : pos.count;
+        const vertex = (i: number, out: THREE.Vector3) => {
+            const n = index ? index.getX(i) : i;
+            return out.set(pos.getX(n), pos.getY(n), pos.getZ(n)).applyMatrix4(mesh.matrixWorld);
+        };
+        for (let i = 0; i + 2 < count; i += 3) {
+            vertex(i, a); vertex(i + 1, b); vertex(i + 2, c);
+            // Cross product of the two edges: its length is twice the area, its y part twice
+            // the area seen from above.
+            const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+            const vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+            const nx = uy * vz - uz * vy;
+            const ny = uz * vx - ux * vz;
+            const nz = ux * vy - uy * vx;
+            const len = Math.hypot(nx, ny, nz);
+            if (!(len > 0) || Math.abs(ny) / len < 0.95) continue; // not flat
+            const area = len / 2;
+            const bin = Math.floor(((a.y + b.y + c.y) / 3 - box.min.y) / BIN);
+            bins.set(bin, (bins.get(bin) ?? 0) + area);
+            total += area;
+        }
+    });
+    if (!(total > 0)) return box.min.y;
+
+    const sorted = [...bins.entries()].sort((x, y) => x[0] - y[0]);
+    const percentile = (q: number) => {
+        let acc = 0;
+        for (const [bin, area] of sorted) {
+            acc += area;
+            if (acc >= total * q) return bin;
+        }
+        return sorted[sorted.length - 1][0];
+    };
+    const lo = percentile(0.02);
+    const top = Math.floor((box.max.y - box.min.y) / BIN);
+    const limit = lo + (top - lo) / 2;
+
+    let best = lo;
+    let bestArea = -1;
+    for (const [bin, area] of sorted) {
+        if (bin < lo || bin > limit) continue;
+        if (area > bestArea) { best = bin; bestArea = area; }
+    }
+    return box.min.y + (best + 0.5) * BIN;
+}
+
 /** Read the extensionsUsed list from a GLB's JSON chunk. */
 function glbExtensions(buffer: ArrayBuffer): string[] {
     try {
@@ -153,9 +225,12 @@ async function loadModel(model: ModelDefinition, url: string, onProgress: (p: nu
 
     const root = new THREE.Group();
     root.name = `plugin-3d-models:${model.id}`;
+    let groundAboveLowest = 0;
     if (model.recenter && !box.isEmpty()) {
         const center = box.getCenter(new THREE.Vector3());
-        scene.position.sub(new THREE.Vector3(center.x, box.min.y, center.z));
+        const groundY = model.ground === 'lowest' ? box.min.y : detectGroundY(scene, box);
+        groundAboveLowest = groundY - box.min.y;
+        scene.position.sub(new THREE.Vector3(center.x, groundY, center.z));
     }
     root.add(scene);
     // The camera here is MapLibre's combined matrix, not a normal three.js camera, and the
@@ -171,7 +246,7 @@ async function loadModel(model: ModelDefinition, url: string, onProgress: (p: nu
         triangles += Math.floor((index ? index.count : position ? position.count : 0) / 3);
     });
 
-    return { root, triangles, size, bytes: buffer.byteLength };
+    return { root, triangles, size, groundAboveLowest, bytes: buffer.byteLength };
 }
 
 export interface ModelLayerOptions {
@@ -270,6 +345,7 @@ export class ModelLayer implements CustomLayerInterface {
                 triangles: this.loaded.triangles,
                 // glTF is y-up; with heading 0, model x is east and model z is north-south.
                 sizeMeters: [x * s, z * s, y * s],
+                groundAboveLowest: this.loaded.groundAboveLowest * s,
                 bytes: this.loaded.bytes
             }
         });
@@ -280,8 +356,7 @@ export class ModelLayer implements CustomLayerInterface {
         if (this.map.getZoom() < MIN_ZOOM) return;
 
         const p = this.opts.getPlacement();
-        let ground = 0;
-        if (p.clampToTerrain) ground = this.map.queryTerrainElevation([p.lon, p.lat]) ?? 0;
+        const ground = p.clampToTerrain ? this.terrainGround(p) : 0;
 
         const origin = MercatorCoordinate.fromLngLat([p.lon, p.lat], ground + p.altitude);
         const s = origin.meterInMercatorCoordinateUnits() * p.scale;
@@ -301,6 +376,37 @@ export class ModelLayer implements CustomLayerInterface {
 
         this.renderer.resetState();
         this.renderer.render(this.scene, this.camera);
+    }
+
+    /**
+     * Terrain height for the model's ground. Sampling only the anchor would read the bottom of
+     * a stadium bowl (or the top of the stands, on a surface model) when the elevation data
+     * includes the building. Take the median of the anchor and eight points around the edge
+     * of the model's footprint, which is the surrounding ground the scan's ground matches.
+     */
+    private terrainGround(p: ModelPlacement): number {
+        if (!this.map || !this.loaded) return 0;
+        const centre = this.map.queryTerrainElevation([p.lon, p.lat]);
+        if (centre === null) return 0; // 3D terrain is off: the map is flat at height 0.
+
+        const halfEW = (this.loaded.size.x * p.scale) / 2 * 0.9;
+        const halfNS = (this.loaded.size.z * p.scale) / 2 * 0.9;
+        const h = THREE.MathUtils.degToRad(p.heading);
+        const mPerDegLat = 111320;
+        const mPerDegLon = mPerDegLat * Math.cos(p.lat * Math.PI / 180);
+        const samples = [centre];
+        for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2;
+            const ex = Math.cos(a) * halfEW;
+            const ny = Math.sin(a) * halfNS;
+            // Rotate clockwise by the heading.
+            const east = ex * Math.cos(h) + ny * Math.sin(h);
+            const north = -ex * Math.sin(h) + ny * Math.cos(h);
+            const e = this.map.queryTerrainElevation([p.lon + east / mPerDegLon, p.lat + north / mPerDegLat]);
+            if (e !== null) samples.push(e);
+        }
+        samples.sort((a, b) => a - b);
+        return samples[Math.floor(samples.length / 2)];
     }
 
     onRemove(): void {

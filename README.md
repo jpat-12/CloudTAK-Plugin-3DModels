@@ -106,6 +106,14 @@ the service worker serves the old bundle.
   the globe projection MapLibre's mercator matrix no longer lines up.
 - **Offline.** CloudTAK's service worker doesn't cache files outside `/assets/`, so the model
   downloads again (subject to the browser's HTTP cache) and won't load with no network.
+- **Ground level.** Scans include the ground around the building, plus stray points or a sunken
+  field below it. The plugin finds the scan's ground (the height with the most flat area in the
+  lower half of the model) and puts that on the map, not the lowest point. The panel shows how
+  far above the lowest point it found the ground. With 3D terrain on, the terrain height is the
+  median of nine samples around the footprint, so a bowl or stands in the elevation data don't
+  skew it. Set `ground: 'lowest'` in `lib/models.ts` for a clean model with no ground. Untick
+  **Follow 3D terrain height** to ignore elevation entirely (height 0, right when 3D terrain is
+  off), and use the height offset arrows for fine adjustment.
 - **Lighting.** Photogrammetry textures already contain real-world light, so models are drawn
   unlit by default (`unlit: true` in `lib/models.ts`).
 - **Draw order.** Models go below the first symbol layer, so labels and CoT markers stay on top.

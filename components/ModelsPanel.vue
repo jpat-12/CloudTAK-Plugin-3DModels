@@ -228,12 +228,28 @@
                             </div>
                             <div class='col-6'>
                                 <label class='form-label small mb-0'>Height offset (m)</label>
-                                <input
-                                    v-model.number='settings[model.id].placement.altitude'
-                                    type='number'
-                                    step='0.5'
-                                    class='form-control form-control-sm'
-                                >
+                                <div class='input-group input-group-sm'>
+                                    <button
+                                        class='btn btn-sm'
+                                        title='Lower 0.5 m'
+                                        @click='raise(model.id, -0.5)'
+                                    >
+                                        <IconArrowDown :size='16' />
+                                    </button>
+                                    <input
+                                        v-model.number='settings[model.id].placement.altitude'
+                                        type='number'
+                                        step='0.5'
+                                        class='form-control form-control-sm'
+                                    >
+                                    <button
+                                        class='btn btn-sm'
+                                        title='Raise 0.5 m'
+                                        @click='raise(model.id, 0.5)'
+                                    >
+                                        <IconArrowUp :size='16' />
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -243,7 +259,13 @@
                                 class='form-check-input'
                                 type='checkbox'
                             >
-                            <span class='form-check-label'>Sit on 3D terrain when terrain is on</span>
+                            <span class='form-check-label'>Follow 3D terrain height</span>
+                            <div
+                                class='text-secondary'
+                                v-text='settings[model.id].placement.clampToTerrain
+                                    ? "Raises the model to the ground level around it when 3D terrain is on."
+                                    : "Ignores elevation: the model sits at height 0, which is right only when 3D terrain is off."'
+                            />
                         </label>
 
                         <div>
@@ -354,6 +376,11 @@ function rotate(id: string, by: number): void {
     p.heading = round((((p.heading + by) % 360) + 360) % 360, 2);
 }
 
+function raise(id: string, by: number): void {
+    const p = settings[id].placement;
+    p.altitude = round(p.altitude + by, 2);
+}
+
 function useMapCenter(id: string): void {
     const map = currentMap();
     if (!map) return;
@@ -367,7 +394,8 @@ function infoText(id: string): string {
     if (!info) return '';
     const [ew, ns, h] = info.sizeMeters.map((n) => Math.round(n));
     const mb = (info.bytes / 1024 / 1024).toFixed(1);
-    return `${info.triangles.toLocaleString()} triangles · ${mb} MB · about ${ew} × ${ns} m, ${h} m tall at heading 0`;
+    const ground = info.groundAboveLowest >= 0.5 ? ` · ground found ${Math.round(info.groundAboveLowest)} m above the lowest point` : '';
+    return `${info.triangles.toLocaleString()} triangles · ${mb} MB · about ${ew} × ${ns} m, ${h} m tall at heading 0${ground}`;
 }
 
 async function copyPlacement(id: string): Promise<void> {

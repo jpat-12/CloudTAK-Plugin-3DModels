@@ -52,6 +52,13 @@ export interface ModelDefinition {
      */
     recenter: boolean;
     /**
+     * Which height of the model sits on the map when recentring:
+     *   'auto'   the ground detected in the scan (most common low vertex height). Right for
+     *            photogrammetry, which includes the surrounding ground and stray low points.
+     *   'lowest' the lowest point of the model. Right for clean models with no ground.
+     */
+    ground: 'auto' | 'lowest';
+    /**
      * Draw textures without lighting. Right for photogrammetry, whose textures already
      * contain the real-world lighting; lit shading would darken it twice.
      */
@@ -76,6 +83,7 @@ export const MODELS: ModelDefinition[] = [{
         clampToTerrain: true
     },
     recenter: true,
+    ground: 'auto',
     unlit: true,
     flyToZoom: 16.5,
     attribution: {

@@ -19,6 +19,7 @@ export class Vector3 {
     sub(v: Vector3): this;
     copy(v: Vector3): this;
     clone(): Vector3;
+    applyMatrix4(m: Matrix4): this;
 }
 
 export class Matrix4 {
@@ -50,6 +51,7 @@ export class Object3D extends EventDispatcher {
     position: Vector3;
     frustumCulled: boolean;
     visible: boolean;
+    matrixWorld: Matrix4;
     children: Object3D[];
     add(...objects: Object3D[]): this;
     remove(...objects: Object3D[]): this;
@@ -79,6 +81,9 @@ export class Texture extends EventDispatcher {
 
 export class BufferAttribute {
     count: number;
+    getX(index: number): number;
+    getY(index: number): number;
+    getZ(index: number): number;
 }
 
 export class BufferGeometry extends EventDispatcher {
