@@ -1,8 +1,9 @@
 // CloudTAK 3D Models plugin: entry point.
 //
-// Draws glTF/GLB models (first: IU Memorial Stadium) on the CloudTAK map with three.js, via a
-// MapLibre custom layer. Adds a "3D Models" menu item whose panel shows/hides each model and
-// lines it up with the imagery.
+// Draws glTF/GLB models on the CloudTAK map with three.js, via a MapLibre custom layer. Adds a
+// "3D Models" menu item whose panel shows/hides each model and lines it up with the imagery.
+// Models come from the organization's models.json (hosted on the CloudTAK server) or from a
+// file the user opens from their own device, which stays in their browser.
 //
 // Installed, this file is <CloudTAK>/app/plugins/<name>/index.ts, found at build time by the
 // plugins/*/index.ts glob.
@@ -16,7 +17,7 @@
 import type { App } from 'vue';
 import { markRaw } from 'vue';
 import type { PluginAPI, PluginInstance, MenuItemConfig } from '@tak-ps/cloudtak';
-import { IconBuildingStadium } from '@tabler/icons-vue';
+import { IconBox } from '@tabler/icons-vue';
 import ModelsPanel from './components/ModelsPanel.vue';
 import { attach, detach } from './lib/controller.ts';
 
@@ -47,8 +48,8 @@ export default class ThreeDModelsPlugin implements PluginInstance {
             label:       '3D Models',
             route:       ROUTE_NAME,
             tooltip:     '3D Models',
-            description: 'Show 3D building models on the map',
-            icon:        markRaw(IconBuildingStadium) as unknown as MenuItemConfig['icon'],
+            description: 'Show 3D models on the map',
+            icon:        markRaw(IconBox) as unknown as MenuItemConfig['icon'],
         } as MenuItemConfig);
 
         try {

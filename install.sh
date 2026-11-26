@@ -7,15 +7,15 @@
 # depends on the CloudTAK checkout:
 #
 #   Current CloudTAK (app/plugin.ts exists)
-#       Adds this repo's git URL to WEB_PLUGINS in <CloudTAK>/.env, then rebuilds. The image
-#       build clones the repo into app/plugins/ and copies public/ (the GLB) into the web
-#       app. Copying files into app/plugins/ by hand does NOT work there: CloudTAK's
+#       Adds this repo's git URL (and any --pack model pack URLs) to WEB_PLUGINS in
+#       <CloudTAK>/.env, then rebuilds. The image build clones each repo into app/plugins/ and
+#       copies its public/ (models.json and the GLBs) into the web app. Copying files into app/plugins/ by hand does NOT work there: CloudTAK's
 #       .dockerignore leaves plugin folders out of the image build.
-#       Because the build clones from git, push your changes (and the GLB) first.
+#       Because the build clones from git, push your changes (and the GLBs) first.
 #
 #   Older CloudTAK (api/web/plugin.ts exists)
-#       Copies the plugin into api/web/plugins/3d-models/ and public/ into api/web/public/,
-#       then rebuilds, like the other CloudTAK plugins' installers.
+#       Copies the plugin into api/web/plugins/3d-models/, and each --pack folder's
+#       public/plugin-3d-models/ into api/web/public/, then rebuilds.
 #
 # Usage:
 #   Install:  ./install.sh [/path/to/CloudTAK]
@@ -29,6 +29,9 @@
 #   --remove            Uninstall, then rebuild.
 #   --url URL           Git URL for WEB_PLUGINS (default: this checkout's origin remote).
 #                       Append #<branch|tag|sha> to pin a version.
+#   --pack PACK         Your organization's model pack (see examples/model-pack/). A git URL
+#                       on current CloudTAK, a local folder on the older layout. Repeatable.
+#                       With --remove, removes that pack too.
 #
 # Requires: bash; git; and (unless --no-build) docker + docker compose.
 
@@ -36,20 +39,21 @@ set -euo pipefail
 
 INSTALL_DIR_NAME="3d-models"
 PUBLIC_DIR_NAME="plugin-3d-models"
-DEFAULT_URL="https://github.com/jpat-12/CloudTAK-Plugin_3d-Models.git"
+DEFAULT_URL="https://github.com/jpat-12/CloudTAK-Plugin-3DModels.git"
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() { sed -n '/^# Usage:/,/^# Requires:/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # --- parse args --------------------------------------------------------------------
-CT_DIR=""; DO_BUILD=1; DO_PULL=0; ACTION="install"; PLUGIN_URL=""
+CT_DIR=""; DO_BUILD=1; DO_PULL=0; ACTION="install"; PLUGIN_URL=""; PACKS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --pull)     DO_PULL=1 ;;
         --no-build) DO_BUILD=0 ;;
         --remove)   ACTION="remove" ;;
         --url)      shift; PLUGIN_URL="${1:?--url needs a value}" ;;
+        --pack)     shift; PACKS+=("${1:?--pack needs a value}") ;;
         -h|--help)  usage; exit 0 ;;
         -*)         echo "Unknown option: $1" >&2; echo >&2; usage >&2; exit 2 ;;
         *)          CT_DIR="$1" ;;
@@ -81,9 +85,10 @@ if [ "$DO_PULL" -eq 1 ]; then
     echo "Pulling latest plugin source..."; git -C "$REPO_DIR" pull; echo
 fi
 
-if [ "$ACTION" = "install" ] && ! ls "$REPO_DIR/public/$PUBLIC_DIR_NAME/"*.glb >/dev/null 2>&1; then
-    echo "WARNING: no .glb in public/$PUBLIC_DIR_NAME/. The plugin will install, but the panel will"
-    echo "         report the model file as missing until you add it (see README)."
+if [ "$ACTION" = "install" ] && [ "${#PACKS[@]}" -eq 0 ] && [ ! -f "$REPO_DIR/public/$PUBLIC_DIR_NAME/models.json" ]; then
+    echo "NOTE: no model pack given (--pack) and no public/$PUBLIC_DIR_NAME/models.json here."
+    echo "      Users can still open .glb files from their own device; to share models with"
+    echo "      everyone, publish a model pack (see examples/model-pack/README.md)."
     echo
 fi
 
@@ -99,20 +104,27 @@ if [ "$LAYOUT" = "app" ]; then
 
     # Drop any existing entry for this repo (any URL form / pinned rev / letter case), then add ours.
     lower() { tr '[:upper:]' '[:lower:]'; }
-    ours="$(basename "${PLUGIN_URL%%#*}" .git | lower)"
+    ours=("$(basename "${PLUGIN_URL%%#*}" .git | lower)")
+    for pack in "${PACKS[@]:-}"; do
+        [ -n "$pack" ] && ours+=("$(basename "${pack%%#*}" .git | lower)")
+    done
     kept=""
     IFS=',' read -r -a entries <<< "$current"
     for e in "${entries[@]:-}"; do
         e="$(echo "$e" | xargs)"
         [ -z "$e" ] && continue
         base="$(basename "${e%%#*}" .git | lower)"
-        [ "$base" = "$ours" ] && continue
+        skip=0
+        for o in "${ours[@]}"; do [ "$base" = "$o" ] && skip=1; done
+        [ "$skip" -eq 1 ] && continue
         kept="${kept:+$kept,}$e"
     done
+    new="$kept"
     if [ "$ACTION" = "install" ]; then
-        new="${kept:+$kept,}$PLUGIN_URL"
-    else
-        new="$kept"
+        new="${new:+$new,}$PLUGIN_URL"
+        for pack in "${PACKS[@]:-}"; do
+            [ -n "$pack" ] && new="$new,$pack"
+        done
     fi
 
     cp "$ENV_FILE" "$ENV_FILE.bak"
@@ -121,7 +133,7 @@ if [ "$LAYOUT" = "app" ]; then
     echo "Updated $ENV_FILE (backup: .env.bak)"
     echo "    WEB_PLUGINS=${new:-<empty>}"
     if [ "$ACTION" = "install" ]; then
-        echo "    The image build clones $PLUGIN_URL — push your commits (and the GLB) first."
+        echo "    The image build clones these repos — push your commits (and the GLBs) first."
     fi
 
 # --- older layout: copy files ------------------------------------------------------
@@ -136,9 +148,19 @@ else
         cp -R "$REPO_DIR/index.ts" "$REPO_DIR/components" "$REPO_DIR/lib" "$REPO_DIR/vendor" "$WEB_DEST/"
         echo "Installed web plugin: api/web/plugins/$INSTALL_DIR_NAME"
         rm -rf "$PUBLIC_DEST"; mkdir -p "$PUBLIC_DEST"
-        cp -R "$REPO_DIR/public/$PUBLIC_DIR_NAME/." "$PUBLIC_DEST/"
+        sources=()
+        [ -d "$REPO_DIR/public/$PUBLIC_DIR_NAME" ] && sources+=("$REPO_DIR")
+        for pack in "${PACKS[@]:-}"; do
+            [ -z "$pack" ] && continue
+            [ -d "$pack/public/$PUBLIC_DIR_NAME" ] || { echo "ERROR: --pack $pack has no public/$PUBLIC_DIR_NAME/ folder (on this CloudTAK layout, give a local folder)." >&2; exit 1; }
+            sources+=("$pack")
+        done
+        for src in "${sources[@]:-}"; do
+            [ -z "$src" ] && continue
+            cp -R "$src/public/$PUBLIC_DIR_NAME/." "$PUBLIC_DEST/"
+            echo "Installed model files from $src"
+        done
         rm -f "$PUBLIC_DEST/.gitkeep"
-        echo "Installed model files: api/web/public/$PUBLIC_DIR_NAME"
     fi
 fi
 echo

@@ -1,0 +1,10 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+*.sh text eol=lf
+# Models and textures are binary. Not Git LFS: CloudTAK's WEB_PLUGINS build clones this repo
+# with plain git, which would leave LFS pointer files instead of the model.
+*.glb binary
+*.gltf binary
+*.bin binary
+*.webp binary
+*.ktx2 binary

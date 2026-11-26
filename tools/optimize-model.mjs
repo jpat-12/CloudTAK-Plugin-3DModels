@@ -23,7 +23,7 @@
 //                        supported by the plugin's loader.
 //
 // The output is written next to the input as <name>.optimized.glb unless a path is given.
-// Copy it to ../public/plugin-3d-models/ under the file name lib/models.ts expects.
+// Copy it to your model pack's public/plugin-3d-models/ under the name its models.json uses.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
