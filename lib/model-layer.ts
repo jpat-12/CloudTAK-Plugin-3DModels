@@ -28,12 +28,12 @@ interface LoadedModel {
     bytes: number;
 }
 
-// Parsed models are cached per URL so hiding and re-showing a model, or a basemap change that
+// Parsed models are cached per source (URL or local file) so hiding and re-showing a model, or a basemap change that
 // re-adds the layer, does not download and parse the file again.
 const cache = new Map<string, Promise<LoadedModel>>();
 
-export function forget(url: string): void {
-    cache.delete(url);
+export function forget(key: string): void {
+    cache.delete(key);
 }
 
 async function download(url: string, onProgress: (p: number | null) => void): Promise<ArrayBuffer> {
@@ -44,7 +44,7 @@ async function download(url: string, onProgress: (p: number | null) => void): Pr
         throw new Error(`Could not reach ${url} (${err instanceof Error ? err.message : String(err)}). If it is on another host, CloudTAK's content security policy blocks it; serve it from CloudTAK itself.`, { cause: err });
     }
 
-    if (res.status === 404) throw new Error(`Model file not found at ${url}. Add the GLB to the plugin's public/ folder and rebuild CloudTAK.`);
+    if (res.status === 404) throw new Error(`Model file not found at ${url}. Check its url in models.json, and that the GLB is in a public/plugin-3d-models/ folder of a plugin or model pack in WEB_PLUGINS, then rebuild CloudTAK.`);
     if (!res.ok) throw new Error(`Model download failed: HTTP ${res.status} for ${url}`);
 
     const total = Number(res.headers.get('content-length')) || 0;
@@ -165,28 +165,58 @@ function detectGroundY(root: THREE.Object3D, box: THREE.Box3): number {
     return box.min.y + (best + 0.5) * BIN;
 }
 
-/** Read the extensionsUsed list from a GLB's JSON chunk. */
-function glbExtensions(buffer: ArrayBuffer): string[] {
+interface GlbJson {
+    extensionsUsed?: string[];
+    buffers?: { uri?: string }[];
+    images?: { uri?: string }[];
+}
+
+/** Read a GLB's JSON chunk. */
+function glbJson(buffer: ArrayBuffer): GlbJson {
     try {
         const view = new DataView(buffer);
         const jsonLength = view.getUint32(12, true);
-        const json = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, jsonLength))) as { extensionsUsed?: string[] };
-        return json.extensionsUsed ?? [];
+        return JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, jsonLength))) as GlbJson;
     } catch {
-        return [];
+        return {};
     }
 }
 
-async function loadModel(model: ModelDefinition, url: string, onProgress: (p: number | null) => void): Promise<LoadedModel> {
-    const buffer = await download(url, onProgress);
+/**
+ * Where a model's bytes come from: a same-origin URL (hosted), or a file on the user's device
+ * that is read in the browser and never uploaded (local).
+ */
+export type ModelSource =
+    | { kind: 'url'; url: string }
+    | { kind: 'local'; id: string; label: string; read: () => Promise<ArrayBuffer> };
+
+export function sourceKey(src: ModelSource): string {
+    return src.kind === 'url' ? `url:${src.url}` : `local:${src.id}`;
+}
+
+async function loadModel(model: ModelDefinition, src: ModelSource, onProgress: (p: number | null) => void): Promise<LoadedModel> {
+    const url = src.kind === 'url' ? src.url : src.label;
+    const buffer = src.kind === 'url' ? await download(src.url, onProgress) : await src.read();
 
     if (buffer.byteLength < 12 || new DataView(buffer).getUint32(0, true) !== GLB_MAGIC) {
-        throw new Error(`${url} is not a GLB file. If CloudTAK returned its web page instead, the file is missing from the build: add it to the plugin's public/ folder and rebuild.`);
+        throw new Error(src.kind === 'url'
+            ? `${url} is not a GLB file. If CloudTAK returned its web page instead, the file is missing from the deployment: check the url in models.json and that the file is in public/plugin-3d-models/.`
+            : `${url} is not a GLB file.`);
     }
 
     const loader = new GLTFLoader();
 
-    const extensions = glbExtensions(buffer);
+    const json = glbJson(buffer);
+    const extensions = json.extensionsUsed ?? [];
+    if (src.kind === 'local') {
+        // A local file must be self-contained. Resolving an external texture or buffer would
+        // request it from the CloudTAK server, so refuse rather than make that request.
+        const external = [...(json.buffers ?? []), ...(json.images ?? [])]
+            .some((r) => typeof r.uri === 'string' && !r.uri.startsWith('data:'));
+        if (external) {
+            throw new Error(`${url} refers to separate texture or .bin files. Export a self-contained .glb (textures embedded) and open that instead.`);
+        }
+    }
     for (const unsupported of ['KHR_draco_mesh_compression', 'KHR_texture_basisu']) {
         if (extensions.includes(unsupported)) {
             throw new Error(`${url} uses ${unsupported}, which this plugin does not decode. Re-run tools/optimize-model.mjs with the default options (quantize + WebP).`);
@@ -212,8 +242,13 @@ async function loadModel(model: ModelDefinition, url: string, onProgress: (p: nu
         return { name: 'CLOUDTAK_3D_MODELS_img_textures' };
     });
 
-    const base = new URL(url, window.location.href);
-    const resourcePath = base.href.slice(0, base.href.lastIndexOf('/') + 1);
+    // A GLB carries its own buffers and textures. For a hosted file, anything it does reference
+    // externally resolves next to it; a local file has nowhere to resolve to.
+    let resourcePath = '';
+    if (src.kind === 'url') {
+        const base = new URL(src.url, window.location.href);
+        resourcePath = base.href.slice(0, base.href.lastIndexOf('/') + 1);
+    }
     const gltf = await loader.parseAsync(buffer, resourcePath);
 
     const scene = gltf.scene;
@@ -252,7 +287,7 @@ async function loadModel(model: ModelDefinition, url: string, onProgress: (p: nu
 export interface ModelLayerOptions {
     model: ModelDefinition;
     layerId: string;
-    getUrl: () => string;
+    getSource: () => ModelSource;
     getPlacement: () => ModelPlacement;
     setStatus: (patch: Partial<ModelStatus>) => void;
 }
@@ -306,16 +341,18 @@ export class ModelLayer implements CustomLayerInterface {
 
     private async load(): Promise<void> {
         const { model, setStatus } = this.opts;
-        const url = this.opts.getUrl();
+        const src = this.opts.getSource();
+        const key = sourceKey(src);
 
-        let pending = cache.get(url);
+        let pending = cache.get(key);
         if (!pending) {
-            setStatus({ state: 'loading', message: 'Downloading model…', progress: 0, info: null });
-            pending = loadModel(model, url, (progress) => {
-                setStatus({ state: 'loading', message: 'Downloading model…', progress });
+            const message = src.kind === 'url' ? 'Downloading model…' : 'Reading file from this device…';
+            setStatus({ state: 'loading', message, progress: src.kind === 'url' ? 0 : null, info: null });
+            pending = loadModel(model, src, (progress) => {
+                setStatus({ state: 'loading', message, progress });
             });
-            cache.set(url, pending);
-            pending.catch(() => cache.delete(url));
+            cache.set(key, pending);
+            pending.catch(() => cache.delete(key));
         } else {
             setStatus({ state: 'loading', message: 'Preparing model…', progress: null });
         }
