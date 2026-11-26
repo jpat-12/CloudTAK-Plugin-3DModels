@@ -1,0 +1,30 @@
+{
+    "allowLocalFiles": true,
+    "models": [
+        {
+            "id": "iu-memorial-stadium",
+            "name": "IU Memorial Stadium",
+            "description": "Photogrammetry scan of Memorial Stadium, Bloomington, Indiana",
+            "url": "iu-memorial-stadium.glb",
+            "placement": {
+                "lat": 39.180837,
+                "lon": -86.525596,
+                "heading": 0,
+                "scale": 1,
+                "altitude": 0,
+                "clampToTerrain": true
+            },
+            "ground": "auto",
+            "unlit": true,
+            "flyToZoom": 16.5,
+            "attribution": {
+                "title": "IU Memorial Stadium",
+                "author": "IU3D",
+                "url": "https://sketchfab.com/3d-models/iu-memorial-stadium-37bd3ddfc39941bda2c8550087b6387f",
+                "license": "CC BY 4.0",
+                "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+                "changes": "Decimated, quantized and texture-compressed for web use"
+            }
+        }
+    ]
+}
